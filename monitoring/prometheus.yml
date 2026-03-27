@@ -1,0 +1,18 @@
+# Prometheus scrape configuration for XG3 Badminton
+# Scraped by: docker-compose --profile monitoring up
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "xg3-badminton"
+    static_configs:
+      - targets: ["badminton:8009"]
+    metrics_path: "/metrics"
+    scrape_interval: 15s
+    scrape_timeout: 5s
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
