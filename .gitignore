@@ -1,0 +1,65 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ML models (must be explicitly git-added per CLAUDE.md §17)
+*.pkl
+*.joblib
+*.pt
+*.pth
+models/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+nosetests.xml
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+
+# Linting
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+docker-volumes/
+
+# Logs
+*.log
+logs/
+
+# Secrets — belt and braces
+*.pem
+*.key
+*.cert
+*.crt
+secrets/
