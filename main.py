@@ -115,7 +115,8 @@ app = FastAPI(
     description=(
         "BWF World Tour match prediction and sportsbook pricing — Tier 1. "
         "5 disciplines: MS, WS, MD, XD, WD. "
-        "Markets: Match Winner, Set Handicap, Total Games, Correct Score."
+        "Markets: Match Winner, Set Handicap, Total Games, Correct Score, "
+        "Games Handicap, Correct Score, Clean Win, Trading Controls."
     ),
     docs_url="/docs" if not _IS_PRODUCTION else None,
     redoc_url="/redoc" if not _IS_PRODUCTION else None,
@@ -129,6 +130,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register derivatives and trading controls routers
+from api.derivatives import router as _derivatives_router
+from api.trading_controls import router as _trading_controls_router
+
+app.include_router(_derivatives_router)
+app.include_router(_trading_controls_router)
 
 
 # --------------------------------------------------------------------------- #
