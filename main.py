@@ -149,6 +149,13 @@ app.include_router(_form_router)
 
 @app.get("/health", tags=["health"])
 async def health() -> dict[str, Any]:
+    import os
+    cwd = os.getcwd()
+    model_files = {
+        "r0_ensemble": os.path.exists("models/r0/ensemble.pkl"),
+        "r1_ensemble": os.path.exists("models/r1/ensemble.pkl"),
+        "r2_ensemble": os.path.exists("models/r2/ensemble.pkl"),
+    }
     return {
         "status": "ok",
         "service": "badminton",
@@ -156,6 +163,9 @@ async def health() -> dict[str, Any]:
         "env": _SERVICE_ENV,
         "port": PORT,
         "uptime_s": round(time.time() - _startup_time, 1) if _startup_time else 0,
+        "cwd": cwd,
+        "model_files": model_files,
+        "predictor_ready": _predictor is not None and _predictor.is_ready,
     }
 
 
