@@ -23,6 +23,13 @@ pip-delete-this-directory.txt
 *.pt
 *.pth
 models/
+!models/
+!models/r0/
+!models/r1/
+!models/r2/
+!models/r0/*.pkl
+!models/r1/*.pkl
+!models/r2/*.pkl
 
 # Testing & coverage
 .pytest_cache/
