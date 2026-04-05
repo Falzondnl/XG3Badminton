@@ -131,16 +131,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register derivatives, trading controls, H2H, and form routers
+# Register derivatives, trading controls, H2H, form, and settlement routers
 from api.derivatives import router as _derivatives_router
 from api.trading_controls import router as _trading_controls_router
 from api.h2h import router as _h2h_router
 from api.form import router as _form_router
+from api.settlement import router as _settlement_router
 
 app.include_router(_derivatives_router)
 app.include_router(_trading_controls_router)
 app.include_router(_h2h_router)
 app.include_router(_form_router)
+app.include_router(_settlement_router)
 
 
 # --------------------------------------------------------------------------- #
