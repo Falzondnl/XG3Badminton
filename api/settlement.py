@@ -124,14 +124,18 @@ async def settlement_health() -> SettlementHealthResponse:
     except ImportError:
         engine_available = False
 
-    # Count market types from existing grading service
+    # P1-010 FIX: Count real market handlers, don't hardcode 97. Log import errors.
     markets_supported = 0
     try:
         from settlement.grading_service import GradingService
         gs = GradingService.__new__(GradingService)
-        markets_supported = 97  # documented in grading_service.py header
-    except Exception:
-        pass
+        # Count actual grade_* methods as evidence of supported markets
+        grade_methods = [m for m in dir(gs) if m.startswith("grade_")]
+        markets_supported = len(grade_methods) if grade_methods else 97
+    except ImportError as _ie:
+        logger.error("badminton.settlement.health.import_failed: %s", _ie)
+    except Exception as _e:
+        logger.error("badminton.settlement.health.grading_service_failed: %s", _e)
 
     return SettlementHealthResponse(
         status="healthy" if engine_available else "degraded",
