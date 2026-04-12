@@ -124,14 +124,13 @@ async def settlement_health() -> SettlementHealthResponse:
     except ImportError:
         engine_available = False
 
-    # P1-010 FIX: Count real market handlers, don't hardcode 97. Log import errors.
+    # Count from the canonical SUPPORTED_MARKETS registry on GradingService.
+    # This is the single source of truth — each entry is a market family the
+    # _determine_winner dispatch table handles.
     markets_supported = 0
     try:
         from settlement.grading_service import GradingService
-        gs = GradingService.__new__(GradingService)
-        # Count actual grade_* methods as evidence of supported markets
-        grade_methods = [m for m in dir(gs) if m.startswith("grade_")]
-        markets_supported = len(grade_methods) if grade_methods else 97
+        markets_supported = len(GradingService.SUPPORTED_MARKETS)
     except ImportError as _ie:
         logger.error("badminton.settlement.health.import_failed: %s", _ie)
     except Exception as _e:
@@ -185,48 +184,85 @@ async def grade_match(match_id: str, req: SettlementRequest) -> SettlementRespon
     Uses the full GradingService (97 markets, 15 families).
     """
     try:
-        from settlement.grading_service import (
-            GradingService,
-            MatchResult,
-            SettlementError,
-        )
+        from settlement.grading_service import GradingService, SettlementError
         from core.match_state import MatchLiveState, MatchStatus
     except ImportError as e:
         raise HTTPException(503, f"GradingService unavailable: {e}")
 
-    # Build MatchResult from request
-    try:
-        result = MatchResult(
-            winner=req.result.winner,
-            score_a=req.result.score_a,
-            score_b=req.result.score_b,
-            total_points_a=req.result.total_points_a,
-            total_points_b=req.result.total_points_b,
-            status=req.result.status,
-        )
-    except Exception as e:
-        raise HTTPException(422, f"Invalid match result: {e}")
-
-    # Build open_markets dict from request
+    # Build open_markets dict from request.
+    # Each market entry must supply: market_id (key) → [outcome_names].
+    # Callers may provide either:
+    #   {"market_id": "match_winner", "outcomes": ["P1", "P2"]}
+    # or the legacy flat form:
+    #   {"type": "match_winner", "id": "match_winner"}
     open_markets: Dict[str, List[str]] = {}
     for m in req.markets:
-        mt = m.get("market_type", m.get("type", ""))
-        mid = m.get("id", m.get("market_id", ""))
-        if mt and mid:
-            open_markets.setdefault(mt, []).append(mid)
+        mid = m.get("market_id", m.get("id", m.get("type", m.get("market_type", ""))))
+        outcomes = m.get("outcomes", [])
+        if mid:
+            open_markets[mid] = outcomes if isinstance(outcomes, list) else [outcomes]
+
+    # Resolve match status from request string.
+    _status_map = {
+        "completed": MatchStatus.COMPLETED,
+        "retired":   MatchStatus.RETIRED,
+        "walkover":  MatchStatus.WALKOVER,
+    }
+    match_status = _status_map.get(
+        (req.result.status or "completed").lower(),
+        MatchStatus.COMPLETED,
+    )
+
+    # Determine winner: accept "A"/"B" or entity id passed via extra.
+    winner_raw = req.result.winner or req.result.extra.get("winner", "A")
+    # Normalise to "A" or "B" — if the caller sends entity ids,
+    # extra.entity_a_id / entity_b_id must also be provided.
+    entity_a = req.result.extra.get("entity_a_id", "player_a")
+    entity_b = req.result.extra.get("entity_b_id", "player_b")
+    if winner_raw not in ("A", "B"):
+        winner_norm = "A" if winner_raw == entity_a else "B"
+    else:
+        winner_norm = winner_raw
+
+    # Rebuild game_scores from extra if provided; otherwise synthesise from
+    # games-won counts so MatchResult.from_live_state can derive totals.
+    game_scores_raw = req.result.extra.get("game_scores", [])
+    if game_scores_raw and isinstance(game_scores_raw[0], (list, tuple)):
+        game_scores: List[tuple] = [tuple(gs) for gs in game_scores_raw]
+    elif req.result.score_a + req.result.score_b > 0:
+        # Synthesise placeholder game scores consistent with games-won counts.
+        # We don't know per-game breakdowns here so use generic legal scores.
+        synthetic = []
+        for _ in range(req.result.score_a):
+            synthetic.append((21, 10))  # A wins
+        for _ in range(req.result.score_b):
+            synthetic.append((10, 21))  # B wins
+        game_scores = synthetic
+    else:
+        game_scores = []
+
+    discipline_str = req.result.extra.get("discipline", "MS")
+    try:
+        from config.badminton_config import Discipline
+        discipline = Discipline(discipline_str)
+    except (ValueError, ImportError):
+        from config.badminton_config import Discipline
+        discipline = Discipline.MS
 
     try:
         gs = GradingService()
-        # GradingService.settle_match expects live_state and open_markets
-        # Build a minimal live_state from the result data
         live_state = MatchLiveState(
             match_id=match_id,
-            status=MatchStatus.COMPLETED,
-            score_a=req.result.score_a,
-            score_b=req.result.score_b,
+            entity_a_id=entity_a,
+            entity_b_id=entity_b,
+            discipline=discipline,
+            status=match_status,
+            games_won_a=req.result.score_a,
+            games_won_b=req.result.score_b,
+            game_scores=game_scores,
             total_points_a=req.result.total_points_a,
             total_points_b=req.result.total_points_b,
-            winner=req.result.winner,
+            match_winner=winner_norm,
         )
         records = gs.settle_match(live_state=live_state, open_markets=open_markets)
     except SettlementError as e:
