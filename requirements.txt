@@ -39,3 +39,5 @@ orjson>=3.9,<4.0
 # Dev only
 black>=23.0,<25.0
 ruff>=0.1,<1.0
+
+sentry-sdk[fastapi]>=1.40.0
