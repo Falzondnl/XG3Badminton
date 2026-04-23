@@ -122,65 +122,17 @@ async def lifespan(app: FastAPI):
         logger.error("xg3_badminton_predictor_load_failed: %s", exc)
         _predictor = None
 
-    # --- Fixture Discovery Poller (BET365 pattern: multi-source, proactive) ---
-    # Optic Odds does NOT carry badminton.  Poll Flashscore for upcoming matches
-    # every 10 minutes so the service discovers fixtures autonomously rather than
-    # requiring manual registration via POST /matches/register.
-    import asyncio
-    import datetime as _dt
-
-    _discovery_task: asyncio.Task | None = None
-
-    async def _fixture_discovery_loop() -> None:
-        _POLL_INTERVAL_S = 600  # 10 minutes
-        logger.info("badminton_fixture_discovery_started interval_s=%d", _POLL_INTERVAL_S)
-        while True:
-            try:
-                from feed.flashscore_client import FlashscoreClient
-                fs = FlashscoreClient(event_callback=lambda e: None)  # discovery only
-                if not fs._api_key:
-                    logger.debug("badminton_fixture_discovery_no_key")
-                    await asyncio.sleep(_POLL_INTERVAL_S)
-                    continue
-                today = _dt.date.today().isoformat()
-                tomorrow = (_dt.date.today() + _dt.timedelta(days=1)).isoformat()
-                total = 0
-                for date_str in [today, tomorrow]:
-                    try:
-                        events = await fs.fetch_schedule(date_str)
-                        total += len(events)
-                    except Exception:
-                        pass
-                if total > 0:
-                    logger.info("badminton_fixture_discovery_ok count=%d", total)
-                else:
-                    logger.debug("badminton_fixture_discovery_empty")
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:
-                logger.warning("badminton_fixture_discovery_error: %s", exc)
-            await asyncio.sleep(_POLL_INTERVAL_S)
-
-    _flashscore_key = os.environ.get("FLASHSCORE_API_KEY", "")
-    if _flashscore_key:
-        _discovery_task = asyncio.create_task(
-            _fixture_discovery_loop(), name="badminton_fixture_discovery"
-        )
-        logger.info("badminton_fixture_discovery_scheduled")
-    else:
-        logger.warning(
-            "badminton_fixture_discovery_skipped — FLASHSCORE_API_KEY not set"
-        )
+    # --- Optic Odds Fixture Discovery Poller ---
+    # Polls Optic Odds every 30 minutes for all BWF circuit league IDs so
+    # GET /api/v1/badminton/fixtures returns autodiscovered upcoming matches
+    # without requiring manual POST /matches/register calls.
+    from services.fixture_poller import start_fixture_poller, stop_fixture_poller
+    start_fixture_poller()
 
     yield
 
-    # Cancel fixture discovery on shutdown
-    if _discovery_task and not _discovery_task.done():
-        _discovery_task.cancel()
-        try:
-            await _discovery_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    # Shut down fixture poller cleanly on service stop
+    stop_fixture_poller()
 
     uptime = round(time.time() - _startup_time, 1)
     logger.info("xg3_badminton_shutdown uptime_s=%s", uptime)
@@ -212,18 +164,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register derivatives, trading controls, H2H, form, and settlement routers
+# Register derivatives, trading controls, H2H, form, settlement, and fixtures routers
 from api.derivatives import router as _derivatives_router
 from api.trading_controls import router as _trading_controls_router
 from api.h2h import router as _h2h_router
 from api.form import router as _form_router
 from api.settlement import router as _settlement_router
+from api.fixtures import router as _fixtures_router
 
 app.include_router(_derivatives_router)
 app.include_router(_trading_controls_router)
 app.include_router(_h2h_router)
 app.include_router(_form_router)
 app.include_router(_settlement_router)
+app.include_router(_fixtures_router)
 
 
 # --------------------------------------------------------------------------- #
