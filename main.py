@@ -122,6 +122,21 @@ async def lifespan(app: FastAPI):
         logger.error("xg3_badminton_predictor_load_failed: %s", exc)
         _predictor = None
 
+    # --- BWF ELO Seed ---
+    # Inject real BWF world-ranking ELO values into the loaded feature extractors
+    # so unknown players resolve to real ratings instead of ELO_DEFAULT=1500.
+    # Only injects where the player key is absent (training-derived values take
+    # precedence). Safe to call even when predictor failed to load (logs + skips).
+    try:
+        from ml.elo_startup_seeder import seed_elo_into_predictor
+        if _predictor is not None:
+            n_elo = seed_elo_into_predictor(_predictor)
+            logger.info("badminton_elo_seeded n_entities=%d", n_elo)
+        else:
+            logger.warning("badminton_elo_seed_skipped reason=predictor_not_loaded")
+    except Exception as exc:
+        logger.error("badminton_elo_seed_failed: %s", exc)
+
     # --- Optic Odds Fixture Discovery Poller ---
     # Polls Optic Odds every 30 minutes for all BWF circuit league IDs so
     # GET /api/v1/badminton/fixtures returns autodiscovered upcoming matches

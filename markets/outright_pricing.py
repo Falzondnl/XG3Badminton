@@ -138,6 +138,8 @@ class OutrightPricingEngine:
         self._markov = BadmintonMarkovEngine()
         self._margin_engine = MarginEngine()
         self._rng = random.Random()
+        # Lazy-import seeder to avoid circular deps at module load time
+        self._elo_seeder_available: bool | None = None  # None = unchecked
 
     def price_tournament(
         self,
@@ -279,9 +281,12 @@ class OutrightPricingEngine:
                 rwp_a = max(0.20, min(0.80, ea.rwp_as_server))
                 rwp_b = max(0.20, min(0.80, eb.rwp_as_server))
 
-                # Fallback: use ELO-derived estimate if RWP unavailable
-                if rwp_a == 0.0 or rwp_b == 0.0:
-                    elo_diff = ea.elo_rating - eb.elo_rating
+                # Fallback: use ELO-derived estimate if RWP is truly unavailable
+                # (check original field before clamp — 0.0 means "not set by caller")
+                if ea.rwp_as_server == 0.0 or eb.rwp_as_server == 0.0:
+                    elo_a = self._resolve_elo(ea, discipline)
+                    elo_b = self._resolve_elo(eb, discipline)
+                    elo_diff = elo_a - elo_b
                     from config.badminton_config import RWP_BASELINE
                     baseline = RWP_BASELINE[discipline]
                     rwp_a = baseline + 0.08 / 400.0 * elo_diff * 0.5
@@ -300,6 +305,48 @@ class OutrightPricingEngine:
                 match_probs[(eb.entity_id, ea.entity_id)] = 1.0 - p_a_wins
 
         return match_probs
+
+    def _resolve_elo(self, entry: TournamentEntry, discipline: Discipline) -> float:
+        """
+        Return the best available ELO for a TournamentEntry.
+
+        Resolution order:
+          1. entry.elo_rating if it was explicitly set by the caller (not the 1500.0 default).
+             We detect "not set" by comparing to exactly 1500.0 — callers setting a real
+             rating of exactly 1500 are treated as unset (acceptable approximation).
+          2. Seeder lookup from elo_seed_badminton.json via get_seeded_rating().
+          3. Fall back to 1500.0 with a warning log.
+
+        This prevents equal-odds pricing for recognisable but RWP-less entries.
+        """
+        # If caller set a real ELO (not the dataclass default), use it
+        if entry.elo_rating != 1500.0:
+            return entry.elo_rating
+
+        # Attempt seeder lookup
+        try:
+            if self._elo_seeder_available is None:
+                try:
+                    from ml.elo_startup_seeder import get_seeded_rating as _gsr
+                    self._elo_seeder_available = True
+                except ImportError:
+                    self._elo_seeder_available = False
+
+            if self._elo_seeder_available:
+                from ml.elo_startup_seeder import get_seeded_rating
+                seeded = get_seeded_rating(discipline.value, entry.entity_id)
+                if seeded is not None:
+                    return seeded
+        except Exception as exc:
+            logger.warning("outright.elo_seeder_lookup_failed entity=%s error=%s", entry.entity_id, exc)
+
+        # Legitimate fallback — player not in seed data
+        logger.warning(
+            "outright.elo_fallback_1500 entity=%s discipline=%s — not in seed data, using ELO_DEFAULT",
+            entry.entity_id,
+            discipline.value,
+        )
+        return 1500.0
 
     def _apply_completed_results(
         self,
