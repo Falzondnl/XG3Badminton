@@ -24,9 +24,13 @@ RUN pip install --no-cache-dir --prefix=/install "prometheus_client>=0.17,<1.0"
 # ─── Runtime stage ────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
-# Runtime system deps (libgomp for LightGBM/XGBoost)
+# Runtime system deps (libgomp for LightGBM/XGBoost + curl for HEALTHCHECK).
+# curl is REQUIRED because Coolify v4 runs `curl -fsS http://localhost/...` as
+# the deploy-time healthcheck — without it the probe returns "curl: not found"
+# and Coolify rolls back to the previous container.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder
