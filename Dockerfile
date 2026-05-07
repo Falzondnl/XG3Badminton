@@ -68,11 +68,8 @@ ENV SERVICE_ENV=production \
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://localhost:${PORT:-8034}/health/live || exit 1
 
-# Run with uvicorn — production settings
-CMD ["python", "-m", "uvicorn", "main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8034", \
-     "--workers", "2", \
-     "--loop", "uvloop", \
-     "--log-level", "warning", \
-     "--no-access-log"]
+# Run with uvicorn — production settings.
+# Shell form so $PORT (set by Coolify env, defaults 8034) is interpolated;
+# this MUST match the HEALTHCHECK port above so the deploy-time probe hits
+# the actual listening socket.
+CMD sh -c "exec python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8034} --workers 2 --loop uvloop --log-level warning --no-access-log"
