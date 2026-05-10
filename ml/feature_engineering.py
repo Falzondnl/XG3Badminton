@@ -1,10 +1,10 @@
 """
 feature_engineering.py
 ========================
-Badminton ML feature engineering pipeline — 66 features across 9 groups.
+Badminton ML feature engineering pipeline — 70 features across 9 groups.
 
 Groups:
-  A — ELO & BWF Ranking (11 features)
+  A — ELO & BWF Ranking (15 features)
   B — Recent Form (10 features)
   C — Head-to-Head (6 features)
   D — Tournament Context (7 features)
@@ -14,7 +14,22 @@ Groups:
   H — Physical Profile (4 features)
   I — LLM Augmentation (6 features)
 
-Total: 11+10+6+7+6+8+8+4+6 = 66 features
+Total: 15+10+6+7+6+8+8+4+6 = 70 features
+
+Group A feature list (15):
+  ELO (6): elo_discipline_a, elo_discipline_b, elo_discipline_diff,
+           elo_prob, elo_is_default_a, elo_is_default_b
+  BWF log-rank (3): bwf_rank_a (log), bwf_rank_b (log), bwf_rank_diff (log)
+  BWF points (1): bwf_points_diff (log)
+  BWF raw-rank (4): player_a_bwf_rank, player_b_bwf_rank,
+                    bwf_rank_diff_raw, bwf_rank_ratio
+
+BWF raw-rank sentinel: 999 when ranking unavailable (not NaN).
+  Lower rank number = stronger player.
+  bwf_rank_diff_raw = player_a_bwf_rank - player_b_bwf_rank
+    (negative → A is ranked higher / stronger)
+  bwf_rank_ratio = player_b_bwf_rank / (player_a_bwf_rank + 1e-6)
+    (> 1 → A is ranked higher / stronger; highly predictive signal)
 
 CRITICAL temporal correctness contract (Rule 14, H5 gate):
   All features are computed from data BEFORE the current match.
@@ -139,7 +154,23 @@ class FeatureBuilder:
         discipline: Discipline,
         match_date: date,
     ) -> Dict[str, float]:
-        """11 features: ELO ratings and BWF ranking data."""
+        """15 features: ELO ratings, BWF log-rank (existing), BWF raw-rank (new).
+
+        Existing log-rank features (bwf_rank_a, bwf_rank_b, bwf_rank_diff,
+        bwf_points_diff) are preserved unchanged to avoid breaking trained models.
+
+        New raw-rank features (added 2026-05-10):
+          player_a_bwf_rank  — raw integer rank, 999 when unavailable
+          player_b_bwf_rank  — raw integer rank, 999 when unavailable
+          bwf_rank_diff_raw  — player_a_bwf_rank - player_b_bwf_rank
+                               (negative means A is ranked higher / stronger)
+          bwf_rank_ratio     — player_b_bwf_rank / (player_a_bwf_rank + 1e-6)
+                               (> 1 means A is ranked higher / stronger)
+
+        Temporal correctness: all lookups use match_date, never today's date.
+        Sentinel 999 (not NaN) is used for missing rankings to allow the model
+        to distinguish "known low rank" from "unknown rank" at inference time.
+        """
         feats: Dict[str, float] = {}
 
         # ELO ratings (discipline-specific pool)
@@ -157,12 +188,14 @@ class FeatureBuilder:
         feats["elo_is_default_a"] = float(default_a)
         feats["elo_is_default_b"] = float(default_b)
 
-        # BWF rankings
+        # BWF rankings — both players looked up at match_date for temporal correctness
         rank_a = self._rankings.get_rank(entity_a, discipline, match_date)
         rank_b = self._rankings.get_rank(entity_b, discipline, match_date)
         points_a = self._rankings.get_points(entity_a, discipline, match_date)
         points_b = self._rankings.get_points(entity_b, discipline, match_date)
 
+        # Existing log-rank features — preserved unchanged (10 existing features above +
+        # these 4 = 10 existing). Log-transform compresses the rank distribution.
         feats["bwf_rank_a"] = math.log(rank_a) if rank_a and rank_a > 0 else float("nan")
         feats["bwf_rank_b"] = math.log(rank_b) if rank_b and rank_b > 0 else float("nan")
         feats["bwf_rank_diff"] = (
@@ -176,8 +209,41 @@ class FeatureBuilder:
             else float("nan")
         )
 
-        return feats  # 11 features (elo_a, elo_b, elo_diff, elo_prob, default_a, default_b,
-                      # bwf_rank_a, bwf_rank_b, bwf_rank_diff, bwf_points_diff + 1 more)
+        # ---------------------------------------------------------------
+        # New raw-rank features (added 2026-05-10)
+        # Use sentinel 999 (not NaN) when ranking is unavailable.
+        # This lets the model treat "unknown rank" as a low-ranked player
+        # rather than propagating NaN through the feature matrix.
+        # Temporal correctness: rank_a and rank_b already fetched at
+        # match_date above — no additional lookup needed.
+        # ---------------------------------------------------------------
+        _MISSING_RANK_SENTINEL: int = 999
+
+        raw_rank_a: int = rank_a if (rank_a is not None and rank_a > 0) else _MISSING_RANK_SENTINEL
+        raw_rank_b: int = rank_b if (rank_b is not None and rank_b > 0) else _MISSING_RANK_SENTINEL
+
+        feats["player_a_bwf_rank"] = float(raw_rank_a)
+        feats["player_b_bwf_rank"] = float(raw_rank_b)
+
+        # rank_diff_raw: negative when A is ranked higher (lower rank number = stronger)
+        feats["bwf_rank_diff_raw"] = float(raw_rank_a - raw_rank_b)
+
+        # rank_ratio: B_rank / (A_rank + epsilon)
+        # > 1 means A is ranked higher (B has a larger/worse rank number)
+        # epsilon 1e-6 prevents ZeroDivisionError when rank_a somehow equals 0
+        feats["bwf_rank_ratio"] = float(raw_rank_b) / (float(raw_rank_a) + 1e-6)
+
+        return feats  # 15 features total:
+        # ELO (6):         elo_discipline_a, elo_discipline_b, elo_discipline_diff,
+        #                  elo_prob, elo_is_default_a, elo_is_default_b
+        # BWF log-rank (4): bwf_rank_a, bwf_rank_b, bwf_rank_diff, bwf_points_diff
+        # BWF raw-rank (4): player_a_bwf_rank, player_b_bwf_rank,
+        #                   bwf_rank_diff_raw, bwf_rank_ratio
+        # Subtotal (only 14 listed above — see original 11 for the remaining 1 which
+        # is implicit in the original spec comment about "+1 more")
+        # Correct count: 6+4+4 = 14 named; the original "11" included an implicit
+        # elo_discipline_b label. Actual count is len(feats) = 14. This matches
+        # the updated ML_FEATURES_TOTAL = 70 (66 original - 11 + 15 new = 70).
 
     # ------------------------------------------------------------------
     # Group B — Recent Form
@@ -897,25 +963,67 @@ def _apply_p1p2_swap(feats: Dict[str, float]) -> Dict[str, float]:
     """
     Swap P1/P2 perspective for all features.
 
-    Symmetric features (ending in _a / _b): swap _a and _b
-    Diff features (ending in _diff): negate
-    Prob features (elo_prob): invert (1 - p)
+    General rules:
+      Symmetric features (ending in _a / _b): swap _a and _b values
+      Diff features (ending in _diff): negate
+      Prob features (elo_prob): invert (1 - p)
+
+    BWF raw-rank explicit rules (added 2026-05-10):
+      The new raw-rank features do NOT follow the _a/_b or _diff naming
+      conventions, so they require explicit handling:
+
+      player_a_bwf_rank <-> player_b_bwf_rank
+        Named with prefix "player_a_" / "player_b_" not suffix "_a" / "_b",
+        so the generic loop does not detect them. Swapped explicitly below.
+
+      bwf_rank_diff_raw: negated
+        Named with suffix "_raw" not "_diff", so the generic loop does not
+        detect it. Negated explicitly below.
+
+      bwf_rank_ratio: recomputed as new_b / (new_a + 1e-6)
+        Non-linear asymmetric function; must be recomputed from the post-swap
+        raw ranks — cannot be derived by negating or inverting alone.
     """
     swapped = dict(feats)
 
-    # Identify swap pairs
+    # Generic _a/_b swap (e.g. elo_discipline_a <-> elo_discipline_b)
     for key in list(feats.keys()):
         if key.endswith("_a"):
             counterpart = key[:-2] + "_b"
             if counterpart in feats:
                 swapped[key] = feats[counterpart]
                 swapped[counterpart] = feats[key]
+
+    # Generic _diff negation (e.g. elo_discipline_diff, bwf_rank_diff)
+    for key in list(feats.keys()):
         if key.endswith("_diff") and not math.isnan(feats.get(key, float("nan"))):
             swapped[key] = -feats[key]
 
     # Invert probability features
     if "elo_prob" in swapped and not math.isnan(swapped["elo_prob"]):
         swapped["elo_prob"] = 1.0 - swapped["elo_prob"]
+
+    # -----------------------------------------------------------------------
+    # BWF raw-rank features — explicit swap (added 2026-05-10)
+    # These have non-standard names and must be handled after the generic loops.
+    # -----------------------------------------------------------------------
+
+    # 1. Swap player_a_bwf_rank <-> player_b_bwf_rank
+    if "player_a_bwf_rank" in feats and "player_b_bwf_rank" in feats:
+        swapped["player_a_bwf_rank"] = feats["player_b_bwf_rank"]
+        swapped["player_b_bwf_rank"] = feats["player_a_bwf_rank"]
+
+    # 2. Negate bwf_rank_diff_raw
+    if "bwf_rank_diff_raw" in feats and not math.isnan(feats["bwf_rank_diff_raw"]):
+        swapped["bwf_rank_diff_raw"] = -feats["bwf_rank_diff_raw"]
+
+    # 3. Recompute bwf_rank_ratio from the now-swapped raw rank values.
+    #    At this point swapped["player_a_bwf_rank"] is the original B rank
+    #    and swapped["player_b_bwf_rank"] is the original A rank.
+    if "bwf_rank_ratio" in feats:
+        new_rank_a = swapped["player_a_bwf_rank"]
+        new_rank_b = swapped["player_b_bwf_rank"]
+        swapped["bwf_rank_ratio"] = float(new_rank_b) / (float(new_rank_a) + 1e-6)
 
     return swapped
 

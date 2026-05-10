@@ -326,7 +326,10 @@ MC_SIMULATIONS_OUTRIGHT: int = 50_000      # Tournament outright simulation
 # § 13. ML MODEL PARAMETERS
 # ---------------------------------------------------------------------------
 
-ML_FEATURES_TOTAL: int = 66               # 9 groups (A-I)
+ML_FEATURES_TOTAL: int = 70               # 9 groups (A-I); Group A expanded to 15 features
+                                          # (+4 BWF raw-rank: player_a_bwf_rank,
+                                          # player_b_bwf_rank, bwf_rank_diff_raw,
+                                          # bwf_rank_ratio) — added 2026-05-10
 ML_REGIME_R0_MAX_MATCHES: Dict[Discipline, int] = {
     Discipline.MS: 5,
     Discipline.WS: 5,

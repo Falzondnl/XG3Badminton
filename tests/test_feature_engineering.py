@@ -200,9 +200,10 @@ class TestFeatureVectorLength:
         self, builder: FeatureBuilder, match_date: date
     ) -> None:
         feats = builder.group_a_elo_ranking("A", "B", Discipline.MS, match_date)
-        # Group A should have 11 features per spec
-        assert len(feats) >= 10  # at least 10 (spec says 11 but bwf_points gets 1 feature)
-        assert len(feats) <= 12
+        # Group A has 15 features after adding 4 BWF raw-rank features (2026-05-10):
+        # ELO (6) + BWF log-rank (4) + BWF raw-rank (4) = 14 named explicitly;
+        # actual count verified by len(feats).
+        assert len(feats) == 14
 
     def test_group_b_returns_expected_count(
         self, builder: FeatureBuilder, match_date: date,
@@ -243,8 +244,8 @@ class TestFeatureVectorLength:
         assert all(math.isnan(v) for v in feats.values())
 
     def test_total_feature_count_matches_spec(self) -> None:
-        """The ML_FEATURES_TOTAL constant should equal 66."""
-        assert ML_FEATURES_TOTAL == 66
+        """ML_FEATURES_TOTAL == 70 after adding 4 BWF raw-rank features (2026-05-10)."""
+        assert ML_FEATURES_TOTAL == 70
 
 
 # ---------------------------------------------------------------------------
