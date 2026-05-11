@@ -4,6 +4,8 @@ Mirrors the pattern used across XG3 sport microservices.
 """
 from __future__ import annotations
 
+import importlib
+import io
 import logging
 import os
 import pickle
@@ -15,6 +17,32 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
 
 logger = logging.getLogger(__name__)
+
+
+class _NumpyCompatUnpickler(pickle.Unpickler):
+    """Remap numpy._core.* (numpy 2.x pickle format) → numpy.core.* (numpy 1.x)."""
+
+    _REMAP = {
+        "numpy._core.numeric": "numpy.core.numeric",
+        "numpy._core.multiarray": "numpy.core.multiarray",
+        "numpy._core.umath": "numpy.core.umath",
+        "numpy._core.fromnumeric": "numpy.core.fromnumeric",
+        "numpy._core._methods": "numpy.core._methods",
+    }
+
+    def find_class(self, module: str, name: str) -> Any:
+        remapped = self._REMAP.get(module, module)
+        return super().find_class(remapped, name)
+
+
+def _numpy_compat_unpickle(file_obj: Any) -> Any:
+    """Unpickle with numpy 2.x → 1.x module path compatibility."""
+    try:
+        return _NumpyCompatUnpickler(file_obj).load()
+    except Exception:
+        # Fallback to standard unpickle if compat unpickler fails
+        file_obj.seek(0)
+        return pickle.load(file_obj)
 
 
 class StackingEnsemble:
@@ -196,6 +224,6 @@ class StackingEnsemble:
     @classmethod
     def load(cls, path: str) -> "StackingEnsemble":
         with open(path, "rb") as f:
-            obj = pickle.load(f)
+            obj = _numpy_compat_unpickle(f)
         logger.info("ensemble_loaded path=%s", path)
         return obj
