@@ -187,6 +187,7 @@ from api.form import router as _form_router
 from api.settlement import router as _settlement_router
 from api.fixtures import router as _fixtures_router
 from api.predict import router as _predict_router
+from api.sgp import router as _sgp_router
 
 app.include_router(_derivatives_router)
 app.include_router(_trading_controls_router)
@@ -195,6 +196,7 @@ app.include_router(_form_router)
 app.include_router(_settlement_router)
 app.include_router(_fixtures_router)
 app.include_router(_predict_router)
+app.include_router(_sgp_router)
 
 
 # --------------------------------------------------------------------------- #
