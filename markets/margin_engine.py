@@ -47,6 +47,23 @@ logger = structlog.get_logger(__name__)
 _MIN_ODDS = 1.01
 _MIN_PROB = 0.001
 _MAX_PROB = 0.999
+# FIX-ODDS-FLOOR-001 (2026-05-14): Replaces silent max(_MIN_ODDS, ...) with
+# structured WARNING log for 24/7 operator alerting.
+_MAX_MODEL_CONFIDENCE_FOR_PRICING: float = 0.97
+
+
+def _apply_odds_floor(raw_odds: float, context: str = "unknown") -> float:
+    """Return raw_odds floored at _MIN_ODDS with a structured WARNING if triggered."""
+    if raw_odds < _MIN_ODDS:
+        logger.warning(
+            "ODDS_FLOOR_TRIGGERED",
+            sport="badminton",
+            context=context,
+            original_offered=round(raw_odds, 4),
+            clamped_to=_MIN_ODDS,
+        )
+        return _MIN_ODDS
+    return raw_odds
 
 
 @dataclass(frozen=True)
@@ -118,7 +135,7 @@ class MarginEngine:
         result = []
         for fair_p, p_raw in zip(normalised, raw_margined):
             p_margin = max(_MIN_PROB, min(_MAX_PROB, p_raw * scale))
-            odds = max(_MIN_ODDS, 1.0 / p_margin)
+            odds = _apply_odds_floor(1.0 / p_margin, context="apply_margins_list")
             result.append(MarginedPrice(
                 fair_prob=round(fair_p, 6),
                 prob_with_margin=p_margin,   # no rounding — keeps sum accurate for H1 gate
@@ -193,7 +210,7 @@ class MarginEngine:
                 market_id=p.market_id,
                 market_family=p.market_family,
                 outcome_name=p.outcome_name,
-                odds=max(_MIN_ODDS, p.odds),
+                odds=_apply_odds_floor(p.odds, context="power_margin_single"),
                 prob_implied=p.prob_implied,
                 prob_with_margin=p.prob_implied,
             )]
@@ -217,7 +234,7 @@ class MarginEngine:
         result = []
         for price, fair_p in zip(prices, fair_probs):
             p_margin = max(_MIN_PROB, min(_MAX_PROB, fair_p ** k))
-            odds = max(_MIN_ODDS, 1.0 / p_margin)
+            odds = _apply_odds_floor(1.0 / p_margin, context="power_margin_multi")
             result.append(MarketPrice(
                 market_id=price.market_id,
                 market_family=price.market_family,

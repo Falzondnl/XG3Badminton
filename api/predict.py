@@ -299,6 +299,36 @@ async def predict_match(body: BadmintonPredictRequest) -> ORJSONResponse:
     p1_win_final = round(p1_win, 6)
     p2_win_final = round(1.0 - p1_win, 6)
 
+    # FIX-REFUSE-EXTREME-CONFIDENCE-001 (2026-05-14): Refuse-to-price when model
+    # confidence exceeds 0.97. Per CLAUDE.md TIER 3 LAW.
+    _bad_max_conf = 0.97
+    _bad_max = max(p1_win_final, p2_win_final)
+    if _bad_max > _bad_max_conf:
+        logger.warning(
+            "REFUSE_EXTREME_CONFIDENCE sport=badminton p1=%.4f p2=%.4f max=%.4f "
+            "threshold=%.2f rid=%s",
+            p1_win_final, p2_win_final, _bad_max, _bad_max_conf, rid,
+        )
+        return ORJSONResponse(
+            content={
+                "code": "FIXTURE_TOO_CONFIDENT",
+                "message": (
+                    f"Model confidence {_bad_max:.4f} exceeds threshold "
+                    f"{_bad_max_conf} for badminton. Refuse-to-price per TIER 3 LAW."
+                ),
+                "prediction_source": "refuse_extreme_confidence",
+                "sport": "badminton",
+                "details": {
+                    "p1_win_prob": p1_win_final,
+                    "p2_win_prob": p2_win_final,
+                    "max_prob": round(_bad_max, 6),
+                    "threshold": _bad_max_conf,
+                },
+                "retry_after": None,
+            },
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
     response_data = BadmintonPredictResponseData(
         player1=body.player1,
         player2=body.player2,
