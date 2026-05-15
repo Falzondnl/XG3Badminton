@@ -271,17 +271,104 @@ async def predict_match(body: BadmintonPredictRequest) -> ORJSONResponse:
         logger.error("badminton_predict.predictor_import_failed: %s", exc)
         predictor = None
 
+    # ── TIER 2B: Reverse-engineer Pinnacle line when Tier 1 not ready ────────
+    # IMP-TIER2B-BADMINTON-001 (2026-05-15): When BadmintonPredictor is not
+    # ready AND a Pinnacle de-vigged fair prob is supplied via market_prob_player1,
+    # attempt Tier 2B Markov inverse (pricing/tier2b_reverse_engineer.py) to
+    # recover full RWP feature set.  prediction_source becomes
+    # "market_scrape_reverse_engineered".
+    # If Tier 2B also fails, fall through to Tier 2A (market_scrape) if
+    # market_prob_player1 supplied, else Tier 3 refuse-to-price.
     if predictor is None or not predictor.is_ready:
+        # ── Attempt Tier 2B ──────────────────────────────────────────────
+        _t2b_result = None
+        if body.market_prob_player1 is not None:
+            try:
+                from pricing.tier2b_reverse_engineer import get_tier2b_engineer as _get_t2b
+                _t2b_eng = _get_t2b()
+                _t2b_result = _t2b_eng.reverse_engineer(
+                    pinnacle_match_prob=body.market_prob_player1,
+                    discipline=body.discipline,
+                    elo_diff=0.0,  # ELO unavailable when Tier 1 failed
+                    correlation_id=rid,
+                )
+                if _t2b_result is not None and _t2b_eng.validate_output(_t2b_result, body.market_prob_player1):
+                    p1_win_t2b = round(_t2b_result.p_match_a, 6)
+                    p2_win_t2b = round(1.0 - p1_win_t2b, 6)
+                    logger.info(
+                        "TIER2B sport=badminton discipline=%s rwp_a=%.4f rwp_b=%.4f "
+                        "residual_pp=%.4f iters=%d wall_ms=%.1f rid=%s "
+                        "IMP-TIER2B-BADMINTON-001 LOCK-BADMINTON-TIER-2B-REVERSE-ENGINEER-001",
+                        body.discipline,
+                        _t2b_result.rwp_a, _t2b_result.rwp_b,
+                        _t2b_result.solve_residual * 100,
+                        _t2b_result.solve_iterations,
+                        _t2b_result.solve_wall_ms,
+                        rid,
+                    )
+                    response_data = BadmintonPredictResponseData(
+                        player1=body.player1,
+                        player2=body.player2,
+                        discipline=body.discipline,
+                        round=body.round,
+                        tournament_type=body.tournament_type,
+                        p1_win_prob=p1_win_t2b,
+                        p2_win_prob=p2_win_t2b,
+                        raw_prob=p1_win_t2b,
+                        regime=f"tier2b_{body.discipline.lower()}",
+                        market_blend_applied=False,
+                        prediction_source="market_scrape_reverse_engineered",
+                    )
+                    return ORJSONResponse(content=_ok(response_data.model_dump(), rid))
+                else:
+                    logger.warning(
+                        "TIER2B non-convergence sport=badminton discipline=%s "
+                        "falling_through_to_market_scrape rid=%s",
+                        body.discipline, rid,
+                    )
+                    _t2b_result = None
+            except Exception as _t2b_err:
+                logger.warning(
+                    "TIER2B exception sport=badminton error=%s falling_through rid=%s",
+                    _t2b_err, rid,
+                )
+                _t2b_result = None
+
+        # ── Tier 2A: devig fair prob only (no Markov inversion) ──────────
+        if body.market_prob_player1 is not None and _t2b_result is None:
+            p1_t2a = round(float(body.market_prob_player1), 6)
+            p2_t2a = round(1.0 - p1_t2a, 6)
+            logger.info(
+                "TIER2A sport=badminton market_prob_p1=%.4f rid=%s",
+                p1_t2a, rid,
+            )
+            response_data = BadmintonPredictResponseData(
+                player1=body.player1,
+                player2=body.player2,
+                discipline=body.discipline,
+                round=body.round,
+                tournament_type=body.tournament_type,
+                p1_win_prob=p1_t2a,
+                p2_win_prob=p2_t2a,
+                raw_prob=p1_t2a,
+                regime=f"tier2a_{body.discipline.lower()}",
+                market_blend_applied=False,
+                prediction_source="market_scrape",
+            )
+            return ORJSONResponse(content=_ok(response_data.model_dump(), rid))
+
+        # ── Tier 3: refuse-to-price ───────────────────────────────────────
         logger.error(
-            "FIXTURE_UNPRICED sport=badminton reason=model_not_loaded rid=%s", rid,
+            "FIXTURE_UNPRICED sport=badminton reason=model_not_loaded_no_market_data rid=%s", rid,
         )
         return _fixture_unpriced_503(
-            reason="BadmintonPredictor is not loaded — R0/R1/R2 model artefacts missing "
-                   "or service did not start cleanly. Check /health for predictor_ready status.",
+            reason="BadmintonPredictor is not loaded (R0/R1/R2 artefacts missing) AND "
+                   "no market_prob_player1 supplied for Tier 2B/2A fallback. "
+                   "Check /health for predictor_ready status.",
             request_id=rid,
         )
 
-    # ── Run prediction ────────────────────────────────────────────────────────
+    # ── Run Tier 1 prediction ─────────────────────────────────────────────────
     try:
         result = predictor.predict(
             player1=body.player1,
