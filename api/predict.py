@@ -69,6 +69,33 @@ def _error(
     )
 
 
+def _fixture_unpriced_503(
+    reason: str,
+    request_id: str,
+    fixture_id: Optional[str] = None,
+    retry_after: int = 30,
+) -> ORJSONResponse:
+    """
+    LOCK-BADMINTON-FIXTURE-UNPRICED-503-001
+    Canonical FIXTURE_UNPRICED 503 response for cross-sport tooling parity.
+    Emitted on any error path that prevents the MS from pricing a fixture.
+    Format mirrors CLAUDE.md BET365-LEVEL ONLY structured-error contract:
+    code, reason, correlation_id, retry_after, fixture_id.
+    """
+    return ORJSONResponse(
+        content={
+            "code": "FIXTURE_UNPRICED",
+            "reason": reason,
+            "correlation_id": request_id,
+            "retry_after": retry_after,
+            "fixture_id": fixture_id,
+            "sport": "badminton",
+            "meta": _meta(request_id),
+        },
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Pydantic request / response models
 # ---------------------------------------------------------------------------
@@ -245,15 +272,13 @@ async def predict_match(body: BadmintonPredictRequest) -> ORJSONResponse:
         predictor = None
 
     if predictor is None or not predictor.is_ready:
-        return _error(
-            "MODEL_NOT_LOADED",
-            (
-                "BadmintonPredictor is not loaded. "
-                "Ensure R0/R1/R2 model artefacts exist under models/ and the service "
-                "started successfully.  Check /health for predictor_ready status."
-            ),
-            rid,
-            status.HTTP_503_SERVICE_UNAVAILABLE,
+        logger.error(
+            "FIXTURE_UNPRICED sport=badminton reason=model_not_loaded rid=%s", rid,
+        )
+        return _fixture_unpriced_503(
+            reason="BadmintonPredictor is not loaded — R0/R1/R2 model artefacts missing "
+                   "or service did not start cleanly. Check /health for predictor_ready status.",
+            request_id=rid,
         )
 
     # ── Run prediction ────────────────────────────────────────────────────────
@@ -271,12 +296,13 @@ async def predict_match(body: BadmintonPredictRequest) -> ORJSONResponse:
             country=body.country,
         )
     except RuntimeError as exc:
-        logger.warning("badminton_predict.predictor_runtime_error: %s", exc)
-        return _error(
-            "MODEL_NOT_LOADED",
-            str(exc),
-            rid,
-            status.HTTP_503_SERVICE_UNAVAILABLE,
+        logger.warning(
+            "FIXTURE_UNPRICED sport=badminton reason=predictor_runtime_error error=%s rid=%s",
+            exc, rid,
+        )
+        return _fixture_unpriced_503(
+            reason=f"Predictor runtime error — {exc}",
+            request_id=rid,
         )
     except Exception as exc:
         logger.error("badminton_predict.predictor_error: %s", exc, exc_info=True)
