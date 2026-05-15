@@ -122,6 +122,25 @@ async def lifespan(app: FastAPI):
         logger.error("xg3_badminton_predictor_load_failed: %s", exc)
         _predictor = None
 
+    # --- BAD-P0-1 Feature Pipeline Gap Audit ---
+    # The 70-feature pipeline (ml/feature_engineering.py, 9 groups A-I,
+    # ML_FEATURES_TOTAL=70) was designed as the production feature set but the
+    # trainer was NEVER run against it.  The pickled extractor.pkl files for all
+    # three regimes (R0/R1/R2) were trained against ml/features.py
+    # BadmintonFeatureExtractor which exposes only 20 FEATURE_NAMES.
+    # Production is therefore running at 20/70 = 28.6% of planned model power.
+    # This warning fires at every startup so operators can track the gap.
+    # Resolution: run ml/trainer.py against ml/feature_engineering.py, re-pickle
+    # R0/R1/R2 ensembles + calibrators, re-verify ECE < 0.05 (V2 H4 gate).
+    # Tracked as BADMINTON_70FEAT_PENDING in PLATFORM_INVENTORY.json.
+    logger.warning(
+        "BADMINTON_FEATURE_GAP_28PCT: production extractor uses 20-feature "
+        "ml.features.BadmintonFeatureExtractor (20/70 = 28.6%% of planned power). "
+        "ml/feature_engineering.py (70-feat, 9 groups A-I) is staged but the trainer "
+        "has never been run. Tracked as BADMINTON_70FEAT_PENDING. Resolve by running "
+        "ml/trainer.py against feature_engineering.py and re-deploying R0/R1/R2."
+    )
+
     # --- BWF ELO Seed ---
     # Inject real BWF world-ranking ELO values into the loaded feature extractors
     # so unknown players resolve to real ratings instead of ELO_DEFAULT=1500.
@@ -299,6 +318,9 @@ async def price_match(req: PriceMatchRequest) -> dict[str, Any]:
         p2_win_prob=prediction["p2_win_prob"],
     )
 
+    # CLAUDE.md Tier 2 LAW — prediction_source MANDATORY on every price output.
+    # /matches/price always uses the calibrated ensemble path (no market logit blend),
+    # so prediction_source is always "model" here.
     return {
         "success": True,
         "discipline": discipline,
@@ -306,6 +328,7 @@ async def price_match(req: PriceMatchRequest) -> dict[str, Any]:
         "tournament_type": req.tournament_type,
         "model_regime": prediction["regime"],
         "raw_prob": prediction["raw_prob"],
+        "prediction_source": "model",
         **priced,
     }
 

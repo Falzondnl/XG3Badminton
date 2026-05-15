@@ -169,6 +169,19 @@ class BadmintonPredictResponseData(BaseModel):
     market_blend_applied: bool = Field(
         description="True if market_prob_player1 was supplied and logit blend was applied"
     )
+    # CLAUDE.md Tier 2 LAW — MANDATORY on every price output.
+    # Values: "model" (calibrated ensemble, no market blend),
+    #         "model_market_blend" (calibrated ensemble + logit Pinnacle blend),
+    #         "refuse_extreme_confidence" (confidence > 0.97 threshold — 422 path),
+    #         "market_scrape" (Tier 2: Pinnacle de-vigged, no model available),
+    #         "unpriced" (Tier 3: no model and no market data — 503 path).
+    prediction_source: str = Field(
+        description=(
+            "Origin of the price: 'model' | 'model_market_blend' | "
+            "'refuse_extreme_confidence' | 'market_scrape' | 'unpriced'. "
+            "MANDATORY per CLAUDE.md Tier 2 LAW."
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +342,11 @@ async def predict_match(body: BadmintonPredictRequest) -> ORJSONResponse:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
+    # Determine prediction_source per CLAUDE.md Tier 2 LAW.
+    # "model_market_blend" when Pinnacle logit blend was applied;
+    # "model" when pure ensemble + calibrator path.
+    _prediction_source = "model_market_blend" if market_blend_applied else "model"
+
     response_data = BadmintonPredictResponseData(
         player1=body.player1,
         player2=body.player2,
@@ -340,10 +358,13 @@ async def predict_match(body: BadmintonPredictRequest) -> ORJSONResponse:
         raw_prob=round(raw_prob, 6),
         regime=result.get("regime", body.discipline if body.discipline in ("MS", "WS") else "doubles"),
         market_blend_applied=market_blend_applied,
+        prediction_source=_prediction_source,
     )
 
     logger.info(
-        "badminton_predict.complete p1_win=%s regime=%s market_blend=%s rid=%s",
-        p1_win_final, response_data.regime, market_blend_applied, rid,
+        "badminton_predict.complete p1_win=%s regime=%s market_blend=%s "
+        "prediction_source=%s rid=%s",
+        p1_win_final, response_data.regime, market_blend_applied,
+        _prediction_source, rid,
     )
     return ORJSONResponse(content=_ok(response_data.model_dump(), rid))

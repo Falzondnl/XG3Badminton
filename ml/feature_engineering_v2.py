@@ -1,6 +1,29 @@
 """
-feature_engineering.py
-========================
+feature_engineering_v2.py
+==========================
+STATUS: DORMANT — NOT IN PRODUCTION (tracked as BADMINTON_70FEAT_PENDING)
+
+This file defines the PLANNED 70-feature pipeline for badminton (9 groups A-I).
+It was NEVER trained into production model artefacts. The production extractor.pkl
+files (R0/R1/R2) were built against ml/features.py BadmintonFeatureExtractor
+which has only 20 FEATURE_NAMES.
+
+DO NOT use this file as if it is active. DO NOT import it in main.py or predictor.py
+until a full training run has been completed and the resulting R0/R1/R2
+ensemble.pkl + calibrator.pkl + extractor.pkl artefacts are verified (ECE < 0.05
+per V2 H4 gate) and deployed.
+
+Renamed from feature_engineering.py -> feature_engineering_v2.py on 2026-05-15
+as part of BAD-P0-1 remediation (G-3.10 audit).
+
+Resolution path:
+  1. Run ml/trainer.py referencing this file's BadmintonFeatureEngineeringV2 class
+  2. Re-pickle R0/R1/R2 ensemble.pkl + calibrator.pkl + extractor.pkl
+  3. Verify ECE < 0.05 per regime (V2 H4 gate)
+  4. Update PLATFORM_INVENTORY.json ml_features_total=70, clear BADMINTON_70FEAT_PENDING
+  5. Remove BADMINTON_FEATURE_GAP_28PCT warning from main.py lifespan
+  6. Deploy + live-probe
+
 Badminton ML feature engineering pipeline — 70 features across 9 groups.
 
 Groups:
